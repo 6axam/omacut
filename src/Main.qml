@@ -8,10 +8,10 @@ import "Format.js" as Format
 
 ApplicationWindow {
     id: win
-    width: 960
-    height: 680
-    minimumWidth: 640
-    minimumHeight: 460
+    width: 1280
+    height: 820
+    minimumWidth: 760
+    minimumHeight: 580
     visible: true
     title: backend.source.toString() === "" ? "omacut" : "omacut — " + fileName(backend.source)
     readonly property bool hasVideo: backend.source.toString() !== ""
@@ -31,19 +31,22 @@ ApplicationWindow {
     readonly property var timeline: backend.timeline
     // Quitting only warns about unexported edits. One clip spanning the whole
     // first video is never dirty — that's just the source.
-    readonly property bool unexported: hasVideo && timeline.unexported
+    readonly property bool unexported: hasVideo && (timeline.unexported || backend.adjustmentsDirty)
     // Quitting mid-export would stop it, so that asks too, edited or not.
     readonly property bool quitAsks: unexported || backend.exporting
     onQuitAsksChanged: if (!quitAsks) quitConfirmVisible = false
     // Editing shortcuts go quiet while a dialog or the help overlay is up,
     // a probe is about to replace the timeline, or a handle is dragged.
     // A confirmation or the shortcuts overlay is up, and has the keyboard.
-    readonly property bool overlayOpen: quitConfirmVisible || openConfirmVisible || helpVisible
-    readonly property bool editing: hasVideo && timeline.duration > 0 && !overlayOpen && !backend.probing && !editBar.interacting
+    readonly property bool overlayOpen: quitConfirmVisible || openConfirmVisible || helpVisible || adjustmentsPanel.opened
+    readonly property bool inputFocused: activeFocusItem !== null && activeFocusItem instanceof TextInput
+    readonly property bool shortcutsEnabled: editing && !inputFocused
+    readonly property bool editing: hasVideo && timeline.duration > 0 && !overlayOpen && !backend.busy && !editBar.interacting
 
     Material.theme: Material.Dark
     Material.accent: win.accent
-    color: "#0e0e10"
+    Material.roundedScale: theme.radius
+    color: "#0d0e10"
 
     function fileName(url) {
         var s = url.toString();
@@ -190,7 +193,7 @@ ApplicationWindow {
             required property int index
             sequence: index.toString()
             context: Qt.ApplicationShortcut
-            enabled: win.editing
+            enabled: win.shortcutsEnabled
             // Held down, repeats would keep seeking to the same spot.
             autoRepeat: false
             onActivated: seekTo(timeline.duration * index / 10)
@@ -200,41 +203,46 @@ ApplicationWindow {
     Shortcut {
         sequence: "Space"
         context: Qt.ApplicationShortcut
-        enabled: win.hasVideo && !win.overlayOpen
+        enabled: win.hasVideo && !win.overlayOpen && !win.inputFocused
         onActivated: togglePlay()
     }
 
     Shortcut {
         sequence: "Left"
         context: Qt.ApplicationShortcut
-        enabled: win.editing
-        onActivated: seekTo(editBar.playheadSec - 1)
+        enabled: win.shortcutsEnabled
+        onActivated: win.playing() ? seekTo(editBar.playheadSec - 1) : frameStep(-1)
     }
 
     Shortcut {
         sequence: "Right"
         context: Qt.ApplicationShortcut
-        enabled: win.editing
-        onActivated: seekTo(editBar.playheadSec + 1)
+        enabled: win.shortcutsEnabled
+        onActivated: win.playing() ? seekTo(editBar.playheadSec + 1) : frameStep(1)
     }
 
     Shortcut {
         sequence: "Shift+Left"
         context: Qt.ApplicationShortcut
-        enabled: win.editing
+        enabled: win.shortcutsEnabled
         onActivated: seekTo(editBar.playheadSec - 5)
     }
 
     Shortcut {
         sequence: "Shift+Right"
         context: Qt.ApplicationShortcut
-        enabled: win.editing
+        enabled: win.shortcutsEnabled
         onActivated: seekTo(editBar.playheadSec + 5)
     }
 
     // A tap of Alt+Left/Right pauses and steps one video frame. Holding the
     // key repeats far faster than anyone taps, so a repeat within 100ms in
     // the same direction moves 0.2s instead, to cover ground quickly.
+    function frameStep(direction) {
+        player.pause();
+        player.pendingPlay = false;
+        backend.stepFrame(editBar.playheadSec, direction);
+    }
     property double lastAltStepAt: 0
     property int lastAltStepDirection: 0
     function altStep(direction) {
@@ -255,21 +263,21 @@ ApplicationWindow {
     Shortcut {
         sequence: "Alt+Left"
         context: Qt.ApplicationShortcut
-        enabled: win.editing
+        enabled: win.shortcutsEnabled
         onActivated: altStep(-1)
     }
 
     Shortcut {
         sequence: "Alt+Right"
         context: Qt.ApplicationShortcut
-        enabled: win.editing
+        enabled: win.shortcutsEnabled
         onActivated: altStep(1)
     }
 
     Shortcut {
         sequence: "["
         context: Qt.ApplicationShortcut
-        enabled: win.editing
+        enabled: win.shortcutsEnabled
         onActivated: {
             player.pause();
             seekTo(timeline.edgeFrom(editBar.playheadSec, -1));
@@ -279,7 +287,7 @@ ApplicationWindow {
     Shortcut {
         sequence: "]"
         context: Qt.ApplicationShortcut
-        enabled: win.editing
+        enabled: win.shortcutsEnabled
         onActivated: {
             player.pause();
             seekTo(timeline.edgeFrom(editBar.playheadSec, 1));
@@ -289,14 +297,14 @@ ApplicationWindow {
     Shortcut {
         sequence: "Alt+["
         context: Qt.ApplicationShortcut
-        enabled: win.editing
+        enabled: win.shortcutsEnabled
         onActivated: moveClipBy(-1)
     }
 
     Shortcut {
         sequence: "Alt+]"
         context: Qt.ApplicationShortcut
-        enabled: win.editing
+        enabled: win.shortcutsEnabled
         onActivated: moveClipBy(1)
     }
 
@@ -304,7 +312,7 @@ ApplicationWindow {
         sequence: "S"
         context: Qt.ApplicationShortcut
         autoRepeat: false
-        enabled: win.editing
+        enabled: win.shortcutsEnabled
         onActivated: timeline.split(editBar.playheadSec)
     }
 
@@ -312,7 +320,7 @@ ApplicationWindow {
         sequences: ["X", "Delete", "Backspace"]
         context: Qt.ApplicationShortcut
         autoRepeat: false
-        enabled: win.editing
+        enabled: win.shortcutsEnabled
         onActivated: timeline.removeAt(editBar.playheadSec)
     }
 
@@ -320,7 +328,7 @@ ApplicationWindow {
         sequence: "Ctrl+Space"
         context: Qt.ApplicationShortcut
         autoRepeat: false
-        enabled: win.editing
+        enabled: win.shortcutsEnabled
         onActivated: {
             // The frame under the playhead becomes the clip's first, and the
             // playhead stays on it: now the clip's start, not as far into the
@@ -337,7 +345,7 @@ ApplicationWindow {
         sequence: "Ctrl+Shift+Space"
         context: Qt.ApplicationShortcut
         autoRepeat: false
-        enabled: win.editing
+        enabled: win.shortcutsEnabled
         onActivated: {
             // The clip now ends at the playhead, and the playhead stays at the
             // cut, on the clip's last frame, as when dragging its end handle;
@@ -358,7 +366,7 @@ ApplicationWindow {
         sequence: "Z"
         context: Qt.ApplicationShortcut
         autoRepeat: false
-        enabled: win.editing
+        enabled: win.shortcutsEnabled
         onActivated: editBar.toggleZoom()
     }
 
@@ -366,21 +374,21 @@ ApplicationWindow {
         sequence: "F"
         context: Qt.ApplicationShortcut
         autoRepeat: false
-        enabled: win.editing && !backend.busy
+        enabled: win.shortcutsEnabled && !backend.busy
         onActivated: backend.saveFrame(editBar.playheadSec)
     }
 
     Shortcut {
         sequence: "Ctrl+Z"
         context: Qt.ApplicationShortcut
-        enabled: win.editing && timeline.canUndo
+        enabled: win.shortcutsEnabled && timeline.canUndo
         onActivated: timeline.undo()
     }
 
     Shortcut {
         sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]
         context: Qt.ApplicationShortcut
-        enabled: win.editing && timeline.canRedo
+        enabled: win.shortcutsEnabled && timeline.canRedo
         onActivated: timeline.redo()
     }
 
@@ -404,7 +412,7 @@ ApplicationWindow {
     Shortcut {
         sequence: "Ctrl+Shift+O"
         context: Qt.ApplicationShortcut
-        enabled: win.editing && !backend.busy
+        enabled: win.shortcutsEnabled && !backend.busy
         onActivated: addVideo()
     }
 
@@ -413,7 +421,7 @@ ApplicationWindow {
     Shortcut {
         sequence: "Q"
         context: Qt.ApplicationShortcut
-        enabled: !win.overlayOpen
+        enabled: !win.overlayOpen && !win.inputFocused
         onActivated: requestQuit()
     }
 
@@ -436,6 +444,8 @@ ApplicationWindow {
                 win.openConfirmVisible = false;
             else if (win.helpVisible)
                 win.helpVisible = false;
+            else if (adjustmentsPanel.visible)
+                adjustmentsPanel.close();
         }
     }
 
@@ -455,22 +465,34 @@ ApplicationWindow {
         // A freshly loaded source shows black until played; playing it muted
         // until the first frame arrives, then pausing, puts that frame up.
         property bool priming: false
+        property bool frameReady: false
         property int primeMs: 0
         // Keep the exact paused seek target: rounding a frame up to the
         // clip's end must not turn the next backward step into a repeat.
         property real pausedSourceTime: -1
+        property int pausedSeekMs: -1
+
+        function seekPosition(index, sourceTime, andPlay) {
+            if (andPlay) return Math.round(sourceTime * 1000);
+            // Qt presents the preceding frame at an exact timestamp boundary.
+            // Seek just inside the requested frame, without crossing the out-point.
+            var out = timeline.clips[index].out;
+            return Math.max(0, Math.min(Math.floor(sourceTime * 1000) + 1, Math.ceil(out * 1000) - 1));
+        }
 
         // Shows sourceTime in clip index, and plays on from there if asked.
         function show(index, sourceTime, andPlay) {
             var url = backend.videos[timeline.clips[index].source].url;
-            var ms = Math.round(sourceTime * 1000);
+            var ms = seekPosition(index, sourceTime, andPlay);
             pausedSourceTime = andPlay ? -1 : sourceTime;
+            pausedSeekMs = andPlay ? -1 : ms;
             clip = index;
             // Compared as text: url values are never identical as objects.
             if (source.toString() !== url.toString() || mediaStatus === MediaPlayer.LoadingMedia) {
                 pendingMs = ms;
                 pendingPlay = andPlay;
                 loadStarted = mediaStatus === MediaPlayer.LoadingMedia && source.toString() === url.toString();
+                frameReady = false;
                 source = url;
                 return;
             }
@@ -479,6 +501,8 @@ ApplicationWindow {
             position = ms;
             if (andPlay)
                 play();
+            else
+                startPriming(ms);
         }
 
         // Moves a load still in progress to sourceTime in clip index, keeping
@@ -491,7 +515,8 @@ ApplicationWindow {
             }
             clip = index;
             pausedSourceTime = pendingPlay ? -1 : sourceTime;
-            pendingMs = Math.round(sourceTime * 1000);
+            pendingMs = seekPosition(index, sourceTime, pendingPlay);
+            pausedSeekMs = pendingPlay ? -1 : pendingMs;
         }
 
         function startPriming(ms) {
@@ -537,16 +562,13 @@ ApplicationWindow {
             }
         }
         onPositionChanged: {
-            if (priming) {
-                if (player.position > primeMs)
-                    finishPriming();
+            if (priming)
                 return;
-            }
             if (pendingMs >= 0 || clip < 0 || clip >= timeline.clips.length)
                 return;
             var c = timeline.clips[clip], t = player.position / 1000;
             if (!win.playing() && pausedSourceTime >= 0
-                    && player.position === Math.round(pausedSourceTime * 1000))
+                    && (player.position === pausedSeekMs || player.position === Math.round(pausedSourceTime * 1000)))
                 t = pausedSourceTime;
             // Play the clips in order: carry on into a clip that continues
             // this one, jump to any other, and stop after the last.
@@ -610,13 +632,14 @@ ApplicationWindow {
             // output, so nothing watches devices before a video is open.
             property MediaDevices devices: MediaDevices {}
             device: devices.defaultAudioOutput
-            muted: player.priming
+            muted: player.priming || backend.volume === 0
+            volume: Math.min(1, backend.volume)
         }
     }
 
     Timer {
         id: primeFallback
-        interval: 250
+        interval: 5000
         repeat: false
         onTriggered: player.finishPriming()
     }
@@ -626,6 +649,29 @@ ApplicationWindow {
         interval: 5000
         repeat: false
         onTriggered: win.noticeText = ""
+    }
+
+    component EditorButton: Button {
+        id: control
+        implicitHeight: 32
+        implicitWidth: Math.max(32, label.implicitWidth + 24)
+        leftPadding: 12; rightPadding: 12; topPadding: 6; bottomPadding: 6
+        topInset: 0; bottomInset: 0; leftInset: 0; rightInset: 0
+        focusPolicy: Qt.NoFocus
+        opacity: enabled ? 1 : 0.35
+        background: Rectangle {
+            radius: Math.min(4, theme.radius)
+            color: control.highlighted ? win.accent : control.hovered ? "#36383e" : "#27292e"
+            border.color: control.highlighted ? win.accent : "#3a3c42"
+        }
+        contentItem: Text {
+            id: label
+            text: control.text
+            font.pixelSize: 12; font.weight: control.highlighted ? Font.DemiBold : Font.Medium
+            color: control.highlighted ? win.accentForeground : "#e1e2e5"
+            horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+            elide: Text.ElideRight
+        }
     }
 
     component IconButton: Rectangle {
@@ -717,25 +763,106 @@ ApplicationWindow {
         LayoutMirroring.enabled: win.rightToLeft
         LayoutMirroring.childrenInherit: true
         anchors.fill: parent
-        anchors.margins: win.hasVideo ? 16 : 0
-        spacing: 14
+        anchors.margins: 8
+        spacing: 8
 
+        Rectangle {
+            Layout.fillWidth: true; Layout.preferredHeight: 48
+            color: "#17181c"; radius: Math.min(6, theme.radius)
+            RowLayout {
+                anchors.fill: parent; anchors.margins: 10; spacing: 12
+                Rectangle { width: 24; height: 24; radius: Math.min(4, theme.radius); color: win.accent
+                    Text { anchors.centerIn: parent; text: "o"; color: win.accentForeground; font.bold: true; font.pixelSize: 20 }
+                }
+                Label { text: "omacut"; color: "#f3f4f6"; font.pixelSize: 16; font.bold: true }
+                Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 20; color: "#36383e" }
+                EditorButton { text: qsTr("Open"); enabled: !backend.busy; onClicked: openVideo() }
+                Label { Layout.fillWidth: true; text: win.fileName(backend.source); color: "#8f939f"; font.pixelSize: 12; elide: Text.ElideMiddle }
+                EditorButton { objectName: "saveCopyButton"; text: qsTr("Save copy"); highlighted: true; enabled: win.editing; onClicked: exportVideo() }
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true; Layout.fillHeight: true; spacing: 8
+            Rectangle {
+                visible: win.width >= 1100
+                Layout.preferredWidth: 184; Layout.fillHeight: true
+                color: "#17181c"; radius: Math.min(6, theme.radius)
+                ColumnLayout {
+                    anchors.fill: parent; anchors.margins: 12; spacing: 12
+                    Label { text: qsTr("Media"); font.pixelSize: 13; font.bold: true; color: "#e7e8eb" }
+                    EditorButton { Layout.fillWidth: true; text: qsTr("Open a video"); enabled: !backend.busy; onClicked: openVideo() }
+                    ScrollView {
+                        Layout.fillWidth: true; Layout.fillHeight: true; clip: true
+                        contentWidth: availableWidth
+                        Column {
+                            width: parent.width; spacing: 12
+                            Repeater {
+                                model: backend.videos
+                                delegate: Column {
+                                    required property var modelData
+                                    width: 160; spacing: 6
+                                    Rectangle {
+                                        width: parent.width; height: 92; color: "#25272d"; border.color: "#34363e"; radius: Math.min(4, theme.radius); clip: true
+                                        Image { anchors.fill: parent; anchors.margins: 1; fillMode: Image.PreserveAspectFit; asynchronous: true
+                                            source: "image://thumbs/" + modelData.thumbKey + "/0"
+                                        }
+                                    }
+                                    Label { width: parent.width; text: win.fileName(modelData.url); color: "#b9bdc7"; font.pixelSize: 11; elide: Text.ElideMiddle }
+                                }
+                            }
+                        }
+                    }
+                    Label { text: qsTr("Drop a video into the window"); Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#777d8b"; font.pixelSize: 11 }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true; Layout.fillHeight: true
+                color: "#17181c"; radius: Math.min(6, theme.radius)
+                ColumnLayout {
+                    anchors.fill: parent; anchors.margins: 10; spacing: 8
+                    Label { text: qsTr("Preview"); color: "#cbd0d9"; font.pixelSize: 12; font.bold: true }
         // --- video preview ---
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            radius: win.hasVideo ? theme.radius : 0
+            radius: 0
             color: "black"
             clip: true
 
-            VideoOutput {
-                id: videoOut
-                anchors.fill: parent
+            id: preview
+            // Clip in source coordinates, then rotate the clipped image, just as export does.
+            Item {
+                id: cropViewport
+                objectName: "cropViewport"
+                anchors.centerIn: parent
+                readonly property rect crop: backend.crop
+                readonly property real sourceAspect: videoOut.implicitHeight > 0
+                    ? videoOut.implicitWidth / videoOut.implicitHeight : 16 / 9
+                readonly property real aspect: sourceAspect * crop.width / Math.max(0.01, crop.height)
+                readonly property bool quarterTurn: backend.rotation % 180 !== 0
+                readonly property real availableW: quarterTurn ? preview.height : preview.width
+                readonly property real availableH: quarterTurn ? preview.width : preview.height
+                width: Math.min(availableW, availableH * aspect)
+                height: width / Math.max(0.01, aspect)
+                rotation: backend.rotation
+                clip: true
+                VideoOutput {
+                    id: videoOut
+                    x: -cropViewport.crop.x * width
+                    y: -cropViewport.crop.y * height
+                    width: cropViewport.width / Math.max(0.01, cropViewport.crop.width)
+                    height: cropViewport.height / Math.max(0.01, cropViewport.crop.height)
+                    fillMode: VideoOutput.Stretch
+                }
             }
             Connections {
                 target: videoOut.videoSink
                 function onVideoFrameChanged(frame) {
-                    player.finishPriming();
+                    player.frameReady = videoOut.videoSink.videoSize.width > 0 && videoOut.videoSink.videoSize.height > 0;
+                    if (player.frameReady && backend.frameCovers(videoOut.videoSink, player.primeMs))
+                        player.finishPriming();
                 }
             }
 
@@ -790,59 +917,85 @@ ApplicationWindow {
             }
         }
 
-        // --- timeline ---
-        RowLayout {
-            visible: win.hasVideo
-            Layout.fillWidth: true
-            spacing: 10
 
-            IconButton {
-                Layout.preferredWidth: 44
-                Layout.preferredHeight: 44
-                iconName: win.playing() ? "pause" : "play"
-                tipText: win.playing() ? qsTr("Pause") : qsTr("Play")
-                enabled: timeline.duration > 0
-                onClicked: togglePlay()
-            }
-
-            EditBar {
-                id: editBar
-                objectName: "editBar"
-                Layout.fillWidth: true
-                // Frozen while a probe is in flight: it is about to replace
-                // or extend the timeline the bar is showing.
-                enabled: !backend.probing
-                accent: win.accent
-                accentForeground: win.accentForeground
-                onScrub: (seconds) => {
-                    player.pause();
-                    seekTo(seconds);
-                }
-                onScrubClip: (index, sourceTime) => {
-                    player.pause();
-                    player.show(index, sourceTime, false);
+                    RowLayout {
+                        Layout.fillWidth: true; Layout.preferredHeight: 32
+                        Label { Layout.fillWidth: true; text: Format.fmt(editBar.playheadSec); color: win.accent; font.family: "monospace"; font.pixelSize: 12 }
+                        IconButton { implicitWidth: 30; implicitHeight: 30; radius: Math.min(4, theme.radius); iconName: win.playing() ? "pause" : "play"; tipText: win.playing() ? qsTr("Pause") : qsTr("Play"); enabled: timeline.duration > 0; onClicked: togglePlay() }
+                        Label { Layout.fillWidth: true; horizontalAlignment: Text.AlignRight; text: Format.fmt(timeline.duration); color: "#858b98"; font.family: "monospace"; font.pixelSize: 12 }
+                    }
                 }
             }
 
-            IconButton {
-                Layout.preferredWidth: 44
-                Layout.preferredHeight: 44
-                iconName: "plus"
-                tipText: qsTr("Add a video")
-                enabled: timeline.duration > 0 && !backend.busy
-                onClicked: addVideo()
-            }
-
-            IconButton {
-                Layout.preferredWidth: 44
-                Layout.preferredHeight: 44
-                iconName: "download"
-                tipText: qsTr("Export")
-                enabled: timeline.duration > 0 && !backend.busy
-                onClicked: exportVideo()
+            Rectangle {
+                visible: win.width >= 980 && win.hasVideo
+                Layout.preferredWidth: 248; Layout.fillHeight: true
+                color: "#17181c"; radius: Math.min(6, theme.radius)
+                ScrollView {
+                    anchors.fill: parent; anchors.margins: 12; clip: true
+                    contentWidth: availableWidth
+                    VideoSettings { width: parent.width; compact: true; enabled: !backend.busy }
+                }
             }
         }
 
+        Rectangle {
+            visible: win.hasVideo
+            Layout.fillWidth: true; Layout.preferredHeight: 198
+            color: "#17181c"; radius: Math.min(6, theme.radius)
+            ColumnLayout {
+                anchors.fill: parent; anchors.margins: 12; spacing: 10
+                RowLayout {
+                    Layout.fillWidth: true; spacing: 6
+                    EditorButton { text: qsTr("Undo"); enabled: win.editing && timeline.canUndo; onClicked: timeline.undo() }
+                    EditorButton { text: qsTr("Redo"); enabled: win.editing && timeline.canRedo; onClicked: timeline.redo() }
+                    Rectangle { Layout.preferredWidth: 1; Layout.preferredHeight: 20; color: "#36383e" }
+                    EditorButton { objectName: "splitButton"; text: qsTr("Split"); enabled: win.editing; onClicked: timeline.split(editBar.playheadSec) }
+                    EditorButton { objectName: "deleteButton"; text: qsTr("Delete"); enabled: win.editing && timeline.clips.length > 1; onClicked: timeline.removeAt(editBar.playheadSec) }
+                    EditorButton { text: qsTr("Video settings"); enabled: win.hasVideo && !backend.busy; onClicked: { player.pause(); adjustmentsPanel.open() } }
+                    Item { Layout.fillWidth: true }
+                    EditorButton { text: "−"; enabled: win.editing; onClicked: editBar.zoomBy(0.5) }
+                    EditorButton { text: "+"; enabled: win.editing; onClicked: editBar.zoomBy(2) }
+                }
+                RowLayout {
+                    Layout.fillWidth: true; Layout.fillHeight: true; spacing: 12
+                    Rectangle {
+                        Layout.preferredWidth: 68; Layout.fillHeight: true; color: "#1e2026"; border.color: "#2b2e35"
+                        Label { anchors.centerIn: parent; text: qsTr("Video"); font.pixelSize: 11; color: "#8e95a4" }
+                    }
+                    ColumnLayout {
+                        Layout.fillWidth: true; Layout.fillHeight: true; spacing: 6
+                        Item {
+                            Layout.fillWidth: true; Layout.preferredHeight: 22
+                            Repeater {
+                                model: 9
+                                delegate: Item {
+                                    required property int index
+                                    x: index * (parent.width - 1) / 8
+                                    width: 1; height: 22
+                                    Rectangle { width: 1; height: 5; anchors.bottom: parent.bottom; color: "#4b505c" }
+                                    Text { x: index === 8 ? -width : 0; text: Format.fmt(editBar.windowStart + (editBar.windowEnd - editBar.windowStart) * index / 8); color: "#777f8d"; font.pixelSize: 9; font.family: "monospace" }
+                                }
+                            }
+                        }
+                        EditBar {
+                            id: editBar; objectName: "editBar"
+                            Layout.fillWidth: true; Layout.preferredHeight: 76
+                            enabled: !backend.busy; accent: win.accent; accentForeground: win.accentForeground
+                            onScrub: (seconds) => { win.contentItem.forceActiveFocus(); player.pause(); seekTo(seconds) }
+                            onScrubClip: (index, sourceTime) => { win.contentItem.forceActiveFocus(); player.pause(); player.show(index, sourceTime, false) }
+                        }
+                        Item { Layout.fillHeight: true }
+                    }
+                }
+            }
+        }
+        RowLayout {
+            visible: backend.exporting; Layout.fillWidth: true
+            ProgressBar { Layout.fillWidth: true; value: backend.exportProgress }
+            Label { text: Math.round(backend.exportProgress * 100) + "%" }
+            EditorButton { objectName: "cancelExportButton"; text: qsTr("Cancel export"); onClicked: backend.cancelExport() }
+        }
         // --- status line ---
         Item {
             visible: win.hasVideo
@@ -978,7 +1131,7 @@ ApplicationWindow {
                     model: [
                         { keys: "Space", action: qsTr("Play / pause") },
                         { keys: "0–9", action: qsTr("Jump to 0%–90% of the edit") },
-                        { keys: "← / →", action: qsTr("Move playhead 1s") },
+                        { keys: "← / →", action: qsTr("One frame when paused; 1s while playing") },
                         { keys: "Shift ← / →", action: qsTr("Move playhead 5s") },
                         { keys: "Alt ← / →", action: qsTr("One frame; hold to move 0.2s") },
                         { keys: "[ / ]", action: qsTr("Previous / next clip edge") },
@@ -1015,6 +1168,15 @@ ApplicationWindow {
                 }
             }
         }
+    }
+
+    AdjustmentsPanel {
+        id: adjustmentsPanel
+        objectName: "adjustmentsPanel"
+        parent: Overlay.overlay
+        x: Math.max(0, (win.width - width) / 2)
+        y: Math.max(0, (win.height - height) / 2)
+        width: Math.min(560, win.width - 32)
     }
 
     // --- open confirmation (replacing an unexported edit) ---
@@ -1068,6 +1230,7 @@ ApplicationWindow {
             // Drop any prime or load still pending for the last video.
             primeFallback.stop();
             player.priming = false;
+            player.frameReady = false;
             player.pendingMs = -1;
             // Load afresh, even the same path: it may be a new file now.
             player.source = "";
@@ -1078,6 +1241,9 @@ ApplicationWindow {
         }
         function onExportDone(path) {
             win.showNotice(qsTr("Saved %1").arg(path));
+        }
+        function onExportCancelled() {
+            win.showNotice(qsTr("Export cancelled"));
         }
         function onExportFailed(message) {
             win.showNotice(qsTr("Export failed: %1").arg(message));

@@ -9,11 +9,14 @@
 #include <QUrl>
 
 #include "backend.h"
+#include "cli.h"
 #include "theme.h"
 #include "thumbprovider.h"
 #include "translator.h"
 
 int main(int argc, char *argv[]) {
+    const bool headless = argc > 1 && cli::isCommand(QString::fromLocal8Bit(argv[1]));
+    if (headless) qputenv("QT_QPA_PLATFORM", "offscreen");
     // Qt's ffmpeg backend falls through to Vulkan video when VA-API is missing,
     // and on GPUs without Vulkan decode queues it then picks ffmpeg's hwaccel-only
     // av1 decoder and never falls back to dav1d, leaving the preview black. Stick
@@ -32,6 +35,7 @@ int main(int argc, char *argv[]) {
 
     QGuiApplication app(argc, argv);
     app.setApplicationName("omacut");
+    if (headless) return cli::run(app.arguments());
 
     // Associates the window with omacut.desktop so the compositor (Wayland app_id
     // = this name) and taskbars pick up our installed icon.

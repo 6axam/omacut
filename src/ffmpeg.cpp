@@ -107,6 +107,7 @@ VideoInfo probe(const QString &path) {
     const QJsonDocument doc = QJsonDocument::fromJson(proc.readAllStandardOutput());
     const QJsonObject root = doc.object();
     QJsonObject stream;
+    bool copyAudio = true;
     for (const QJsonValue &value : root.value("streams").toArray()) {
         const QJsonObject candidate = value.toObject();
         const QString type = candidate.value("codec_type").toString();
@@ -114,14 +115,18 @@ VideoInfo probe(const QString &path) {
         if (type == "video" && stream.isEmpty()
                 && candidate.value("disposition").toObject().value("attached_pic").toInt() != 1)
             stream = candidate;
-        else if (type == "audio")
+        else if (type == "audio") {
             info.audio = true;
+            copyAudio = copyAudio && candidate.value("codec_name").toString() == "aac";
+        }
     }
     if (stream.isEmpty()) {
         info.error = QCoreApplication::translate("ffmpeg", "No video stream found in this file.");
         return info;
     }
 
+    info.streamCopyCompatible = stream.value("codec_name").toString() == "h264" && copyAudio
+        && root.value("format").toObject().value("format_name").toString().contains("mp4");
     info.width = stream.value("width").toInt();
     info.height = stream.value("height").toInt();
     // Phones record sideways and say how to turn it upright, in a display
@@ -307,7 +312,7 @@ QStringList frameArgs(const QString &path, double frameTime, double keyframeTime
 }
 
 QStringList trimArgs(const QList<Segment> &segments, const QString &dst,
-                     int width, int height, int scaleHeight) {
+                     int width, int height, int scaleHeight, const Adjustments &adjustments) {
     bool audio = false;
     bool mixed = false;
     for (const Segment &segment : segments) {
@@ -325,8 +330,8 @@ QStringList trimArgs(const QList<Segment> &segments, const QString &dst,
     QString inputs;
     for (int i = 0; i < segments.size(); ++i) {
         const Segment &segment = segments[i];
-        const QString length = QString::number(qMax(segment.end - segment.start, 0.0), 'f', 3);
-        args << "-ss" << QString::number(segment.start, 'f', 3) << "-t" << length
+        const QString length = QString::number(qMax(segment.end - segment.start, 0.0), 'f', 6);
+        args << "-ss" << QString::number(segment.start, 'f', 6) << "-t" << length
              << "-i" << segment.path;
         if (!mixed) {
             inputs += QString("[%1:V:0]").arg(i) + (audio ? QString("[%1:a:0]").arg(i) : QString());
@@ -360,6 +365,24 @@ QStringList trimArgs(const QList<Segment> &segments, const QString &dst,
                      .arg(audio ? "[a]" : "");
     else
         graph += QString("[v]") + (audio ? "[a]" : "");
+    QStringList filters;
+    if (adjustments.crop != QRectF(0, 0, 1, 1)) {
+        const QRectF c = adjustments.crop;
+        filters << QString("crop=w='max(2,trunc(iw*%1/2)*2)':h='max(2,trunc(ih*%2/2)*2)':x='trunc(iw*%3/2)*2':y='trunc(ih*%4/2)*2'")
+            .arg(c.width(), 0, 'f', 9).arg(c.height(), 0, 'f', 9)
+            .arg(c.x(), 0, 'f', 9).arg(c.y(), 0, 'f', 9);
+    }
+    if (adjustments.rotation == 90) filters << "transpose=clock";
+    else if (adjustments.rotation == 180) filters << "hflip" << "vflip";
+    else if (adjustments.rotation == 270) filters << "transpose=cclock";
+    if (!filters.isEmpty()) {
+        graph.replace("[v]", "[unadjustedVideo]");
+        graph += ";[unadjustedVideo]" + filters.join(',') + "[v]";
+    }
+    if (audio && adjustments.volume != 1.0) {
+        graph.replace("[a]", "[unadjustedAudio]");
+        graph += QString(";[unadjustedAudio]volume=%1[a]").arg(adjustments.volume, 0, 'f', 6);
+    }
     args << "-filter_complex" << graph << "-map" << "[v]";
     if (audio)
         args << "-map" << "[a]" << "-c:a" << "aac";
@@ -371,6 +394,14 @@ QStringList trimArgs(const QList<Segment> &segments, const QString &dst,
          << "-movflags" << "+faststart"
          << dst;
     return args;
+}
+
+QStringList fastTrimArgs(const Segment &segment, const QString &dst) {
+    return {"-y", "-loglevel", "error", "-progress", "pipe:1",
+            "-ss", QString::number(segment.start, 'f', 6), "-i", segment.path,
+            "-t", QString::number(segment.end - segment.start, 'f', 6),
+            "-map", "0:V:0", "-map", "0:a:0?", "-c", "copy",
+            "-avoid_negative_ts", "make_zero", "-movflags", "+faststart", dst};
 }
 
 }  // namespace ffmpeg

@@ -1,0 +1,39 @@
+#!/bin/bash
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+if [[ ${1:-} == --user ]]; then
+  "$root/bin/build"
+  target="${XDG_DATA_HOME:-$HOME/.local/share}"
+  install -Dm755 "$root/build/omacut" "$HOME/.local/bin/omacut"
+  install -Dm644 "$root/pkgbuild/omacut.svg" "$target/icons/hicolor/scalable/apps/omacut.svg"
+  python3 - "$root/pkgbuild/omacut.desktop" "$target/applications/omacut.desktop" "$HOME/.local/bin/omacut" <<'PY'
+from pathlib import Path
+import sys
+src, dst, binary = sys.argv[1:]
+# Desktop Exec quoting is independent of shell quoting.
+escaped = binary.replace('\\', '\\\\').replace('"', '\\"').replace('`', '\\`').replace('$', '\\$').replace('%', '%%')
+text = Path(src).read_text().replace('Exec=omacut %f', 'Exec="' + escaped + '" %f')
+Path(dst).parent.mkdir(parents=True, exist_ok=True)
+Path(dst).write_text(text + "X-Omacut-Managed=true\n")
+PY
+  if command -v update-desktop-database >/dev/null; then update-desktop-database "$target/applications"; fi
+  echo "Installed $HOME/.local/bin/omacut and the user launcher entry."
+else
+  staging="$root/build/package"
+  mkdir -p "$staging"
+  tar -czf "$staging/omacut-source.tar.gz" -C "$root" CMakeLists.txt src tests pkgbuild/omacut.desktop pkgbuild/omacut.svg LICENSE
+  cp "$root/pkgbuild/PKGBUILD" "$staging/PKGBUILD"
+  cd "$staging"
+  makepkg -fsi
+  # A prior --user installation must not shadow the newly installed package.
+  python3 - <<'PY2'
+import os
+from pathlib import Path
+entry = Path(os.environ.get('XDG_DATA_HOME', str(Path.home() / '.local/share'))) / 'applications/omacut.desktop'
+if entry.exists() and 'X-Omacut-Managed=true' in entry.read_text():
+    entry.unlink()
+    binary = Path.home() / '.local/bin/omacut'
+    if binary.exists():
+        binary.unlink()
+PY2
+fi

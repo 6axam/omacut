@@ -2,8 +2,8 @@ import QtQuick
 import "Format.js" as Format
 
 // The edited video: its clips in play order, each framed with a handle at
-// both ends over its own filmstrip, laid over their footage so what's cut
-// out stays on the track, dimmed, between them. Drag a handle to trim the
+// both ends over its own filmstrip. Clips meet in playback order, so a cut
+// closes immediately when the edit settles. Drag a handle to trim the
 // clip into its source, double-click a clip to split it, double-click the
 // line between two pieces of the same stretch to join them, hold a clip to
 // move it, and click a clip's × to remove it. "t" is seconds along the sequence;
@@ -30,34 +30,22 @@ Item {
     property real viewStartSec: 0
     property real viewEndSec: 0
 
-    // The track is a map of the footage: each video laid out whole, from its
-    // start to its end, and each clip over its own footage in it. A clip
-    // that picks up later in the video of the one before shares its stretch
-    // of track; any other clip starts its video over, after the rest of the
-    // one before. So a cut leaves its footage on the track, dimmed, instead
-    // of closing up, a trim moves no other clip, and dragging a handle back
-    // over the cut restores it. Playback and export still skip the cut.
-    // Track seconds, used for x below, are seconds along this layout, not
-    // the sequence; origin is where a clip's video starts on it.
+    // Track time is edited sequence time. Each clip retains a source origin
+    // for thumbnail placement and trimming, while removed footage takes no
+    // space in the finished sequence.
     function layoutOf(list) {
-        var result = [], origin = 0
+        var result = [], cursor = 0
         for (var i = 0; i < list.length; ++i) {
-            var clip = list[i], before = list[i - 1]
-            // Within a millisecond, as playback and export carry on.
-            if (before && !(before.source === clip.source && clip.in > before.out - 0.001))
-                origin = videoEnd(result[i - 1])
-            result.push({ start: origin + clip.in, end: origin + clip.out, origin: origin, source: clip.source })
+            var clip = list[i], length = clip.out - clip.in
+            result.push({ start: cursor, end: cursor + length,
+                          origin: cursor - clip.in, source: clip.source })
+            cursor += length
         }
         return result
     }
     readonly property var layout: layoutOf(clips)
-    // Where the video of a clip placed at at ends on the track.
     function videoEnd(at) { return at.origin + timeline.sourceDurations[at.source] }
-    // Where the zoomed-out track ends: the end of the last clip's video. A
-    // trim only moves footage between a clip and the dimmed cuts around it,
-    // so this holds unless the trim changes which clips carry on from the one
-    // before; adding, removing or moving clips refits it.
-    readonly property real footageEnd: layout.length ? videoEnd(layout[layout.length - 1]) : 0
+    readonly property real footageEnd: durationSec
     // An edit that leaves no clip in the zoomed view would leave the bar
     // without one, so it zooms back out. Mid-trim the layout changes live;
     // that waits for the drop.
@@ -82,7 +70,7 @@ Item {
     // The stretch of the track currently shown, in track seconds.
     readonly property real windowStart: zoomed ? viewStartSec : 0
     // A drag holds the length it started with, so the handle stays under the pointer.
-    readonly property real windowEnd: zoomed ? viewEndSec : trimming ? videoEnd(area.frozen[area.frozen.length - 1]) : footageEnd
+    readonly property real windowEnd: zoomed ? viewEndSec : trimming && area.frozen.length ? area.frozen[area.frozen.length - 1].end : footageEnd
     readonly property real windowLen: Math.max(windowEnd - windowStart, 0.001)
     readonly property real pxPerSec: width / windowLen
     readonly property color trackColor: "#1c1c1e"
@@ -127,29 +115,35 @@ Item {
         return layout
     }
 
-    // Each stretch of track showing one video whole, as {source, origin,
-    // end}, and the footage cut from it, dimmed, as {start, end}: all but its
-    // clips. Each video's filmstrip is laid out once, under its clips and
-    // cuts, so what a drag uncovers is already there and nothing reloads.
-    // Read from positions alone: mid-drag, the clips change a beat before the
-    // positions catch up, and mixing the two would make the film jump. A
-    // moving clip carries its own filmstrip, and the cuts are hidden.
+    // Adjacent clips share a strip only when they also share the source
+    // origin. While a handle moves, retain its original strip extent so
+    // frames uncovered by the handle stay available under the pointer.
     readonly property var runs: {
         var result = []
         if (area.mode === EditBar.Move) return result
         for (var i = 0; i < positions.length; ++i) {
             var at = positions[i], run = result[result.length - 1]
+            var from = at.start, to = at.end
+            if (area.mode === EditBar.Trim && area.frozen[i]) {
+                from = Math.min(from, area.frozen[i].start)
+                to = Math.max(to, area.frozen[i].end)
+            }
             if (!run || run.source !== at.source || run.origin !== at.origin)
-                result.push(run = { source: at.source, origin: at.origin, clips: [] })
+                result.push(run = { source: at.source, origin: at.origin,
+                                    start: from, end: to, clips: [] })
             run.clips.push(at)
-            run.end = videoEnd(at)
+            run.start = Math.min(run.start, from)
+            run.end = Math.max(run.end, to)
         }
         return result
     }
+    // A temporary dimmed region explains the handle's movement. Once the
+    // gesture ends the timeline ripples and there are no empty regions.
     readonly property var cuts: {
         var result = []
+        if (!trimming) return result
         for (var r = 0; r < runs.length; ++r) {
-            var from = runs[r].origin
+            var from = runs[r].start
             for (var i = 0; i < runs[r].clips.length; ++i) {
                 var at = runs[r].clips[i]
                 if (at.start > from) result.push({ start: from, end: at.start })
@@ -196,6 +190,18 @@ Item {
         if (zoomed && newStart === viewStartSec && newEnd === viewEndSec) zoomed = false
         else { viewStartSec = newStart; viewEndSec = newEnd; zoomed = true }
     }
+    // Buttons can change scale continuously without losing the frame at
+    // the playhead; Z still offers a quick fit to the current segment.
+    function zoomBy(factor) {
+        if (durationSec <= 0 || trimming || !(factor > 0)) return
+        var length = Math.min(durationSec, Math.max(0.1, windowLen / factor))
+        if (length >= durationSec - 0.001) { zoomed = false; return }
+        var center = Math.max(0, Math.min(durationSec, playheadSec))
+        viewStartSec = Math.max(0, Math.min(durationSec - length, center - length / 2))
+        viewEndSec = viewStartSec + length
+        zoomed = true
+    }
+
     // Seconds of source per filmstrip frame: frames about as wide as they are
     // tall at 16:9, on a fixed ladder of steps so frames stay cached across
     // edits and zooms.
@@ -262,11 +268,11 @@ Item {
                 objectName: "run"
                 required property int index
                 // Briefly past the end while the count changes.
-                readonly property var run: root.runs[index] || { source: 0, origin: 0, end: 0 }
-                x: Math.round(root.xForTime(run.origin)); width: Math.round(root.xForTime(run.end)) - x
+                readonly property var run: root.runs[index] || { source: 0, origin: 0, start: 0, end: 0 }
+                x: Math.round(root.xForTime(run.start)); width: Math.round(root.xForTime(run.end)) - x
                 y: root.frameW; height: root.height - 2 * root.frameW
                 clip: true
-                Film { anchors.fill: parent; film: root.filmOf(runItem.run.source, runItem.run.origin, 0, runItem.run.end - runItem.run.origin); offsetX: runItem.x }
+                Film { anchors.fill: parent; film: root.filmOf(runItem.run.source, runItem.run.origin, runItem.run.start - runItem.run.origin, runItem.run.end - runItem.run.origin); offsetX: runItem.x }
             }
         }
         Repeater {
@@ -289,6 +295,12 @@ Item {
                 // Briefly past the end while the clip count changes.
                 readonly property var at: root.positions[index] || { start: 0, end: 0, origin: 0, source: 0 }
                 readonly property bool hovered: area.clipHovered === index
+                readonly property bool selected: {
+                    // clipAt is an invokable, so QML cannot infer that its
+                    // result changes when a trim ripples the clip boundaries.
+                    var current = root.clips
+                    return current.length > 0 && root.timeline.clipAt(root.playheadSec) === index
+                }
                 readonly property bool moving: area.mode === EditBar.Move && area.clipIndex === index
                 // Whole pixels, so handles meet the filmstrip without an antialiased seam.
                 x: Math.round(root.xForTime(at.start)); width: Math.max(4, Math.round(root.xForTime(at.end)) - x)
@@ -305,7 +317,7 @@ Item {
                 Rectangle {
                     anchors.fill: parent
                     radius: root.frameRadius; color: "transparent"
-                    border.color: root.accent; border.width: root.frameW
+                    border.color: clipItem.selected ? root.accent : "#66666c"; border.width: root.frameW
                 }
                 Handle { leading: true }
                 Handle { leading: false }
@@ -387,6 +399,7 @@ Item {
         id: area
         anchors.fill: parent
         hoverEnabled: true
+        preventStealing: true
         property int mode: EditBar.Idle
         property int clipIndex: -1
         property bool leftEdge: true

@@ -33,3 +33,8 @@ target_link_libraries(omacut_tests PRIVATE omacut_core Qt6::Test)
 target_compile_options(omacut_tests PRIVATE -Wno-psabi)
 add_test(NAME omacut_tests COMMAND omacut_tests)
 set_tests_properties(omacut_tests PROPERTIES ENVIRONMENT QT_QPA_PLATFORM=offscreen)
+
+add_executable(scenario_tests tests/scenario_tests.cpp)
+target_link_libraries(scenario_tests PRIVATE omacut_core Qt6::Test)
+add_test(NAME scenario_tests COMMAND scenario_tests)
+set_tests_properties(scenario_tests PROPERTIES ENVIRONMENT QT_QPA_PLATFORM=offscreen)

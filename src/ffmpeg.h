@@ -3,6 +3,7 @@
 #include <QImage>
 #include <QString>
 #include <QStringList>
+#include <QRectF>
 
 #include <functional>
 
@@ -20,6 +21,7 @@ struct VideoInfo {
     int width = 0;
     int height = 0;
     bool audio = false;
+    bool streamCopyCompatible = false;
     bool ok = false;
     QString error;
 };
@@ -63,6 +65,19 @@ struct Segment {
     bool audio = false;
 };
 
+struct Adjustments {
+    int rotation = 0;
+    double volume = 1.0;
+    QRectF crop = QRectF(0, 0, 1, 1);
+    bool operator==(const Adjustments &other) const {
+        return rotation == other.rotation && volume == other.volume && crop == other.crop;
+    }
+    bool operator!=(const Adjustments &other) const { return !(*this == other); }
+};
+
+// Stream copy can seek back to an earlier keyframe and is deliberately opt-in.
+QStringList fastTrimArgs(const Segment &segment, const QString &dst);
+
 // Build the ffmpeg argument list that writes the segments, back to back, to
 // dst. Cuts are frame-accurate and re-encoded with libx264/aac. Segments from
 // different videos are fitted into width x height, letterboxed, with silence
@@ -70,7 +85,8 @@ struct Segment {
 // side becomes scaleHeight (1080p of a portrait video is 1080 wide), always
 // preserving the aspect ratio.
 QStringList trimArgs(const QList<Segment> &segments, const QString &dst,
-                     int width, int height, int scaleHeight = 0);
+                     int width, int height, int scaleHeight = 0,
+                     const Adjustments &adjustments = {});
 
 // Locate a tool on PATH; returns empty string if missing.
 QString toolPath(const QString &tool);

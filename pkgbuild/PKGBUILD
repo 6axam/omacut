@@ -1,0 +1,27 @@
+pkgname=omacut
+pkgver=0.8.3.editor1
+pkgrel=1
+pkgdesc='Short video editor for Omarchy with precise non-destructive editing'
+arch=('x86_64' 'aarch64')
+url='https://github.com/6axam/omacut'
+license=('MIT')
+depends=('ffmpeg' 'hicolor-icon-theme' 'qt6-base' 'qt6-declarative' 'qt6-multimedia' 'xdg-desktop-portal')
+makedepends=('cmake' 'gcc' 'make')
+source=('omacut-source.tar.gz')
+sha256sums=('SKIP')
+
+build() {
+  cmake -S "$srcdir" -B "$srcdir/build" -DCMAKE_BUILD_TYPE=Release
+  cmake --build "$srcdir/build" -j"$(nproc)"
+}
+
+check() {
+  QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software ctest --test-dir "$srcdir/build" --output-on-failure
+}
+
+package() {
+  install -Dm755 "$srcdir/build/omacut" "$pkgdir/usr/bin/omacut"
+  install -Dm644 "$srcdir/pkgbuild/omacut.desktop" "$pkgdir/usr/share/applications/omacut.desktop"
+  install -Dm644 "$srcdir/pkgbuild/omacut.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/omacut.svg"
+  install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/omacut/LICENSE"
+}

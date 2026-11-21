@@ -4,6 +4,8 @@
 #include <QString>
 #include <QUrl>
 #include <QVariantList>
+#include <QVideoFrame>
+#include <QVideoSink>
 
 #include <functional>
 
@@ -12,6 +14,7 @@
 
 class ThumbProvider;
 class FilePicker;
+class QProcess;
 
 // The bridge between QML and the ffmpeg/ffprobe layer. Holds the loaded
 // videos and the clips cut from them, and drives export.
@@ -26,6 +29,13 @@ class Backend : public QObject {
     Q_PROPERTY(bool exporting READ exporting NOTIFY busyChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
     Q_PROPERTY(QObject *timeline READ timeline CONSTANT)
+    Q_PROPERTY(double exportProgress READ exportProgress NOTIFY exportProgressChanged)
+    Q_PROPERTY(int rotation READ rotation WRITE setRotation NOTIFY adjustmentsChanged)
+    Q_PROPERTY(double volume READ volume WRITE setVolume NOTIFY adjustmentsChanged)
+    Q_PROPERTY(QRectF crop READ crop WRITE setCrop NOTIFY adjustmentsChanged)
+    Q_PROPERTY(bool fastExport READ fastExport WRITE setFastExport NOTIFY adjustmentsChanged)
+    Q_PROPERTY(bool fastExportAvailable READ fastExportAvailable NOTIFY adjustmentsChanged)
+    Q_PROPERTY(bool adjustmentsDirty READ adjustmentsDirty NOTIFY adjustmentsChanged)
 
 public:
     explicit Backend(ThumbProvider *provider, QObject *parent = nullptr);
@@ -42,6 +52,28 @@ public:
     bool exporting() const { return m_busy; }
     QString status() const { return m_status; }
     Timeline *timeline() { return &m_timeline; }
+    double exportProgress() const { return m_exportProgress; }
+    int rotation() const { return m_adjustments.rotation; }
+    double volume() const { return m_adjustments.volume; }
+    QRectF crop() const { return m_adjustments.crop; }
+    bool fastExport() const { return m_fastExport; }
+    bool fastExportAvailable() const;
+    bool adjustmentsDirty() const { return m_adjustments != m_exportedAdjustments; }
+    void setRotation(int rotation);
+    void setVolume(double volume);
+    void setCrop(const QRectF &crop);
+    void setFastExport(bool enabled);
+    Q_INVOKABLE void cancelExport();
+    // A queued frame from an earlier seek must not finish a new paused seek.
+    Q_INVOKABLE bool frameCovers(QObject *object, int milliseconds) const {
+        auto *sink = qobject_cast<QVideoSink *>(object);
+        if (!sink) return false;
+        const QVideoFrame frame = sink->videoFrame();
+        const qint64 target = qint64(milliseconds) * 1000;
+        return frame.isValid() && frame.startTime() >= 0 && frame.startTime() <= target
+            && (frame.endTime() > frame.startTime() ? target < frame.endTime()
+                                                    : target - frame.startTime() < 2000);
+    }
 
     // Start over with a video. Probing runs off the UI thread: false means
     // refused outright (busy, or not an absolute local path); the outcome
@@ -83,6 +115,9 @@ signals:
     void videosChanged();
     void busyChanged();
     void statusChanged();
+    void exportProgressChanged();
+    void adjustmentsChanged();
+    void exportCancelled();
     void exportDone(const QString &path);
     void exportFailed(const QString &message);
     void frameStepped(double from, double to);
@@ -102,6 +137,9 @@ private:
     void setStatus(const QString &status);
     void failExport(const QString &tmpPath, const QString &message);
     void wireFilePicker();
+    void setExportProgress(double progress);
+    void exportClipsWithSettings(const QUrl &dst, const edit::Clips &clips, int scaleHeight,
+                                 const ffmpeg::Adjustments &adjustments, bool fast);
 
     struct Video {
         ffmpeg::VideoInfo info;
@@ -144,6 +182,15 @@ private:
     bool m_adding = false;
     double m_addAt = 0.0;
     edit::Clips m_exportDialogClips;
+    ffmpeg::Adjustments m_adjustments;
+    ffmpeg::Adjustments m_exportedAdjustments;
+    ffmpeg::Adjustments m_exportDialogAdjustments;
+    bool m_fastExport = false;
+    bool m_exportDialogFast = false;
+    double m_exportProgress = 0.0;
+    QProcess *m_exportProcess = nullptr;
+    QString m_exportPart;
+    bool m_exportCancelRequested = false;
     bool m_busy = false;
     bool m_probing = false;
     QList<PendingVideo> m_probeQueue;

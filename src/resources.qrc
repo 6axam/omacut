@@ -1,6 +1,7 @@
 <RCC>
     <qresource prefix="/">
         <file alias="Main.qml">Main.qml</file>
+        <file alias="AdjustmentsPanel.qml">AdjustmentsPanel.qml</file>
         <file alias="EditBar.qml">EditBar.qml</file>
         <file alias="Format.js">Format.js</file>
         <file alias="i18n/en.json">i18n/en.json</file>
@@ -56,5 +57,6 @@
         <file alias="ConfirmDialog.qml">ConfirmDialog.qml</file>
         <file alias="DialogButton.qml">DialogButton.qml</file>
         <file alias="DialogPanel.qml">DialogPanel.qml</file>
+        <file alias="VideoSettings.qml">VideoSettings.qml</file>
     </qresource>
 </RCC>
