@@ -18,7 +18,7 @@ Then launch **Omacut** from **Super+Space** or run `omacut recording.mp4`. To tr
 
 ## Editing
 
-The timeline shows the remaining clips in playback order. Split and Delete act on the selected clip under the playhead; removing a clip closes the gap immediately. Drag either edge to trim, click or drag the track to seek, and use +/− or Z to zoom. During a trim the scale and thumbnails hold still; on release the edit closes up. One drag is one undo step.
+The timeline shows the remaining clips in playback order. Split and Delete act on the selected clip under the playhead; removing a clip closes the gap immediately. Drag either edge to trim, click or drag the track to seek, and use +/− or Ctrl+wheel to zoom, the horizontal scrollbar or mouse wheel to pan, and Z to fit the selected clip. The time ruler is independent of clip length and adjusts its tick spacing to the zoom level. During a trim the scale and thumbnails hold still; on release the edit closes up. One drag is one undo step.
 
 For a screen recording: open it, seek to 00:02 and press Ctrl+Space to trim the start. Split at both ends of a pause, click inside that segment, and Delete. Space previews the surviving parts with audio. Save copy chooses a new MP4 beside the source.
 

@@ -1995,17 +1995,21 @@ void BackendTests::qmlZoomFocusesTheClip() {
     QTest::keyClick(window, Qt::Key_Z);
     QTRY_COMPARE_WITH_TIMEOUT(editBar->property("zoomed").toBool(), false, 3000);
 
-    // If edits shrink the sequence past viewStartSec, zoom resets so the
-    // remaining clips don't sit entirely off-screen to the left.
+    // Shrinking the edit pans the visible interval back without changing scale.
     QTest::keyClick(window, Qt::Key_Z);
     QTRY_COMPARE_WITH_TIMEOUT(editBar->property("zoomed").toBool(), true, 3000);
     QCOMPARE(editBar->property("viewStartSec").toDouble(), 4.375);
     backend.timeline.removeClip(2);
     backend.timeline.removeClip(1);
     backend.timeline.setClip(0, 0.0, 4.0);
-    QTRY_COMPARE_WITH_TIMEOUT(editBar->property("zoomed").toBool(), false, 3000);
-    // Zoomed out, the track fits the four seconds left in the edit.
-    QCOMPARE(editBar->property("windowEnd").toDouble(), 4.0);
+    QTRY_COMPARE_WITH_TIMEOUT(editBar->property("zoomed").toBool(), true, 3000);
+    QCOMPARE(editBar->property("windowLen").toDouble(), 6.25);
+    QVERIFY(editBar->property("windowStart").toDouble() < 4.0);
+    QVERIFY(QMetaObject::invokeMethod(editBar, "zoomBy", Q_ARG(QVariant, 0.1), Q_ARG(QVariant, 100.0)));
+    QVERIFY(editBar->property("windowLen").toDouble() > backend.timeline.duration());
+    const double scale = editBar->property("windowLen").toDouble();
+    QVERIFY(QMetaObject::invokeMethod(editBar, "panTo", Q_ARG(QVariant, 1.0)));
+    QCOMPARE(editBar->property("windowLen").toDouble(), scale);
 }
 
 // Where clip index draws on the track, in track seconds.

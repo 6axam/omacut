@@ -50,7 +50,7 @@ Item {
     // without one, so it zooms back out. Mid-trim the layout changes live;
     // that waits for the drop.
     function settleView() {
-        if (zoomed && !layout.some(at => at.end > viewStartSec && at.start < viewEndSec)) zoomed = false
+        if (zoomed) panTo(viewStartSec)
     }
     onLayoutChanged: if (!trimming) settleView()
     // Something is being dragged, so playback must not move the playhead.
@@ -192,15 +192,40 @@ Item {
     }
     // Buttons can change scale continuously without losing the frame at
     // the playhead; Z still offers a quick fit to the current segment.
-    function zoomBy(factor) {
-        if (durationSec <= 0 || trimming || !(factor > 0)) return
-        var length = Math.min(durationSec, Math.max(0.1, windowLen / factor))
-        if (length >= durationSec - 0.001) { zoomed = false; return }
-        var center = Math.max(0, Math.min(durationSec, playheadSec))
-        viewStartSec = Math.max(0, Math.min(durationSec - length, center - length / 2))
+    // The visible interval is independent of the edit duration. Empty space
+    // after the last clip remains visible, as on a real editing timeline.
+    function panTo(start) {
+        if (trimming) return
+        var length = windowLen
+        var maxStart = Math.max(0, durationSec - length * 0.15)
+        viewStartSec = Math.max(0, Math.min(maxStart, start))
         viewEndSec = viewStartSec + length
         zoomed = true
     }
+    function zoomBy(factor, anchorX) {
+        if (durationSec <= 0 || trimming || !(factor > 0)) return
+        var x = anchorX === undefined ? width / 2 : Math.max(0, Math.min(width, anchorX))
+        var fraction = width > 0 ? x / width : 0.5
+        var anchor = windowStart + windowLen * fraction
+        var length = Math.max(0.1, Math.min(86400, windowLen / factor))
+        viewStartSec = Math.max(0, anchor - length * fraction)
+        viewEndSec = viewStartSec + length
+        zoomed = true
+        panTo(viewStartSec)
+    }
+    function revealPlayhead() {
+        if (!zoomed || trimming || interacting) return
+        if (playheadSec < windowStart || playheadSec > windowEnd)
+            panTo(playheadSec - windowLen * 0.2)
+    }
+    readonly property real rulerStep: {
+        var wanted = windowLen * 90 / Math.max(width, 1)
+        var steps = [0.04, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600, 7200, 21600]
+        for (var i = 0; i < steps.length; ++i) if (steps[i] >= wanted) return steps[i]
+        return 43200
+    }
+    readonly property real rulerFirst: Math.ceil(windowStart / rulerStep) * rulerStep
+    readonly property int rulerCount: Math.max(0, Math.floor((windowEnd - rulerFirst) / rulerStep) + 1)
 
     // Seconds of source per filmstrip frame: frames about as wide as they are
     // tall at 16:9, on a fixed ladder of steps so frames stay cached across
@@ -488,6 +513,13 @@ Item {
             cursorShape = Qt.ClosedHandCursor
         }
 
+        onWheel: wheel => {
+            if (wheel.modifiers & Qt.ControlModifier)
+                root.zoomBy(wheel.angleDelta.y > 0 ? 1.25 : 0.8, wheel.x)
+            else
+                root.panTo(root.windowStart - (wheel.angleDelta.x || wheel.angleDelta.y) / 120 * root.windowLen * 0.15)
+            wheel.accepted = true
+        }
         onPositionChanged: mouse => {
             if (root.durationSec <= 0) return
             var t = root.timeForX(mouse.x)

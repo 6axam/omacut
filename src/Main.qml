@@ -589,8 +589,10 @@ ApplicationWindow {
                 clip += 1;
                 c = next;
             }
-            if (!editBar.interacting)
+            if (!editBar.interacting) {
                 editBar.playheadSec = c.start + Math.max(0, Math.min(t, c.out) - c.in);
+                if (win.playing()) editBar.revealPlayhead();
+            }
         }
     }
 
@@ -968,13 +970,24 @@ ApplicationWindow {
                         Item {
                             Layout.fillWidth: true; Layout.preferredHeight: 22
                             Repeater {
-                                model: 9
+                                model: editBar.rulerCount
                                 delegate: Item {
                                     required property int index
-                                    x: index * (parent.width - 1) / 8
+                                    readonly property real tick: editBar.rulerFirst + index * editBar.rulerStep
+                                    x: editBar.xForTime(tick)
                                     width: 1; height: 22
                                     Rectangle { width: 1; height: 5; anchors.bottom: parent.bottom; color: "#4b505c" }
-                                    Text { x: index === 8 ? -width : 0; text: Format.fmt(editBar.windowStart + (editBar.windowEnd - editBar.windowStart) * index / 8); color: "#777f8d"; font.pixelSize: 9; font.family: "monospace" }
+                                    Text { text: Format.fmt(parent.tick); color: "#777f8d"; font.pixelSize: 9; font.family: "monospace" }
+                                }
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                onPressed: mouse => { player.pause(); seekTo(editBar.timeForX(mouse.x)) }
+                                onPositionChanged: mouse => { if (pressed) seekTo(editBar.timeForX(mouse.x)) }
+                                onWheel: wheel => {
+                                    if (wheel.modifiers & Qt.ControlModifier) editBar.zoomBy(wheel.angleDelta.y > 0 ? 1.25 : 0.8, wheel.x)
+                                    else editBar.panTo(editBar.windowStart - (wheel.angleDelta.x || wheel.angleDelta.y) / 120 * editBar.windowLen * 0.15)
+                                    wheel.accepted = true
                                 }
                             }
                         }
@@ -985,7 +998,18 @@ ApplicationWindow {
                             onScrub: (seconds) => { win.contentItem.forceActiveFocus(); player.pause(); seekTo(seconds) }
                             onScrubClip: (index, sourceTime) => { win.contentItem.forceActiveFocus(); player.pause(); player.show(index, sourceTime, false) }
                         }
-                        Item { Layout.fillHeight: true }
+                        ScrollBar {
+                            id: timelineScroll
+                            objectName: "timelineScroll"
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 12
+                            orientation: Qt.Horizontal
+                            policy: ScrollBar.AlwaysOn
+                            size: Math.min(1, editBar.windowLen / Math.max(editBar.durationSec + editBar.windowLen * 0.85, editBar.windowLen))
+                            position: editBar.windowStart / Math.max(editBar.durationSec + editBar.windowLen * 0.85, editBar.windowLen)
+                            onActiveChanged: if (active) editBar.panTo(position * (editBar.durationSec + editBar.windowLen * 0.85))
+                            onPositionChanged: if (pressed) editBar.panTo(position * (editBar.durationSec + editBar.windowLen * 0.85))
+                        }
                     }
                 }
             }
